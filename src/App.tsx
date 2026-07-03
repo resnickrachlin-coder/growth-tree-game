@@ -34,10 +34,7 @@ export default function App() {
   const [username, setUsername] = useState(savedCred.username)
   const [password, setPassword] = useState(savedCred.password)
   const [rememberPwd, setRememberPwd] = useState(savedCred.remember)
-  const [phone, setPhone] = useState('')
-  const [phoneCode, setPhoneCode] = useState('')
   const [showRegister, setShowRegister] = useState(false)
-  const [showPhoneLogin, setShowPhoneLogin] = useState(false)
   const [notifications, setNotifications] = useState<string[]>([])
   const [loggedInUser, setLoggedInUser] = useState<string | null>(null)
 
@@ -184,90 +181,46 @@ export default function App() {
             <p className="text-xs text-moss-500 mt-1">读书 · 思考 · 成长</p>
           </div>
 
-          {!showPhoneLogin ? (
-            <div className="space-y-4">
+          <div className="space-y-4">
+            <input
+              className="w-full px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
+              placeholder="用户名"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+            />
+            <input
+              className="w-full px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
+              type="password"
+              placeholder="密码"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+            />
+            <label className="flex items-center gap-2 text-xs text-moss-500 cursor-pointer select-none">
               <input
-                className="w-full px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
-                placeholder="用户名"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
+                type="checkbox"
+                className="rounded border-moss-300 text-tender-500 focus:ring-tender-400"
+                checked={rememberPwd}
+                onChange={e => setRememberPwd(e.target.checked)}
               />
-              <input
-                className="w-full px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
-                type="password"
-                placeholder="密码"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-              />
-              <label className="flex items-center gap-2 text-xs text-moss-500 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="rounded border-moss-300 text-tender-500 focus:ring-tender-400"
-                  checked={rememberPwd}
-                  onChange={e => setRememberPwd(e.target.checked)}
-                />
-                记住密码
-              </label>
-              <button
-                className="btn-gold w-full"
-                onClick={() => {
-                  if (!username.trim()) { notify('请输入用户名'); return }
-                  if (!password.trim()) { notify('请输入密码'); return }
-                  saveCred(username.trim(), password.trim(), rememberPwd)
-                  setLoggedInUser(username)
-                  setShowLogin(false)
-                  notify(`欢迎回来，${username}！`)
-                }}
-              >
-                登 录
-              </button>
-              <div className="flex gap-2">
-                <button className="btn-ghost flex-1 text-sm" onClick={() => { setShowRegister(true); setShowLogin(false) }}>
-                  注册账号
-                </button>
-                <button className="btn-ghost flex-1 text-sm" onClick={() => setShowPhoneLogin(true)}>
-                  手机号登录
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* Phone login */
-            <div className="space-y-4">
-              <input
-                className="w-full px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
-                type="tel"
-                placeholder="手机号"
-                value={phone}
-                onChange={e => setPhone(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-moss-200/60 bg-white/80 focus:border-tender-400 focus:outline-none transition text-sm"
-                  placeholder="验证码"
-                  value={phoneCode}
-                  onChange={e => setPhoneCode(e.target.value)}
-                />
-                <button className="btn-ghost text-xs shrink-0 px-3" onClick={() => notify('验证码已发送（演示）')}>
-                  获取验证码
-                </button>
-              </div>
-              <button
-                className="btn-gold w-full"
-                onClick={() => {
-                  if (!phone.trim()) { notify('请输入手机号'); return }
-                  if (!phoneCode.trim()) { notify('请输入验证码'); return }
-                  setLoggedInUser(phone)
-                  setShowLogin(false)
-                  notify(`欢迎回来！`)
-                }}
-              >
-                手机号登录
-              </button>
-              <button className="btn-ghost w-full text-sm" onClick={() => setShowPhoneLogin(false)}>
-                返回账号密码登录
-              </button>
-            </div>
-          )}
+              记住密码
+            </label>
+            <button
+              className="btn-gold w-full"
+              onClick={() => {
+                if (!username.trim()) { notify('请输入用户名'); return }
+                if (!password.trim()) { notify('请输入密码'); return }
+                saveCred(username.trim(), password.trim(), rememberPwd)
+                setLoggedInUser(username)
+                setShowLogin(false)
+                notify(`欢迎回来，${username}！`)
+              }}
+            >
+              登 录
+            </button>
+            <button className="btn-ghost w-full text-sm" onClick={() => { setShowRegister(true); setShowLogin(false) }}>
+              注册账号
+            </button>
+          </div>
         </div>
       </div>
     )
