@@ -1,0 +1,12 @@
+name = "growth-tree-game"
+main = "dist/index.html"
+compatibility_date = "2026-07-03"
+
+[site]
+bucket = "dist"
+
+[env.production]
+routes = [{ pattern = "*", zone_id = "" }]
+
+[env.production.assets]
+not_found_handling = "single_page_application"
