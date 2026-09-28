@@ -17,6 +17,7 @@ export interface Book {
   finishSummary: string
   chapters: Chapter[]
   lastReadChapter?: number
+  readChapters: number[]  // 记录已读的章节ID列表
 }
 
 export interface Chapter {
@@ -54,6 +55,7 @@ export interface DailyTask {
   readSubmit: boolean
   thinkSubmit: boolean
   thinkSubmitCount: number
+  checkInDates: string[]  // 记录已签到日期
 }
 
 export interface GameState {
@@ -81,7 +83,8 @@ function getStorageKey(userId: string): string {
 }
 
 export function getLevelExp(level: number): number {
-  return 100 + (level - 1) * 50
+  // 每级固定150EXP，满级100级后可重新种树
+  return 150
 }
 
 export function getStage(level: number): Stage {
@@ -114,8 +117,9 @@ export function createInitialState(): GameState {
       readSubmit: false,
       thinkSubmit: false,
       thinkSubmitCount: 0,
+      checkInDates: [],
     },
-    bookList: B1.map(b => ({ ...b })),
+    bookList: B1.map(b => ({ ...b } as Book)),
     unlockAsset: {
       branchList: [],
       skinList: [],
@@ -186,6 +190,7 @@ function sanitizeBook(book: Partial<Book>): Book {
     finishSummary: book.finishSummary ?? '',
     chapters: Array.isArray(book.chapters) ? book.chapters : [],
     lastReadChapter: Math.max(0, ensureNum(book.lastReadChapter, 0)),
+    readChapters: Array.isArray(book.readChapters) ? book.readChapters : [],
   }
 }
 
@@ -232,6 +237,7 @@ export function mergeState(saved: Partial<GameState>): GameState {
   const dailyTask = { ...def.dailyTask, ...(saved.dailyTask ?? {}) } as DailyTask
   dailyTask.eggCount = Math.max(0, ensureNum(dailyTask.eggCount, 0))
   dailyTask.thinkSubmitCount = Math.max(0, ensureNum(dailyTask.thinkSubmitCount, 0))
+  dailyTask.checkInDates = Array.isArray(dailyTask.checkInDates) ? dailyTask.checkInDates : []
 
   const bookList = (
     Array.isArray(saved.bookList) && saved.bookList.length > 0
@@ -249,6 +255,12 @@ export function loadState(userId: string): GameState {
   if (typeof window === 'undefined' || !userId) return createInitialState()
   try {
     const raw = window.localStorage.getItem(getStorageKey(userId))
+    // 输出用户数据到控制台
+    if (raw) {
+      console.log('===== 用户数据 START =====')
+      console.log(JSON.stringify(JSON.parse(raw), null, 2))
+      console.log('===== 用户数据 END =====')
+    }
     return raw ? mergeState(JSON.parse(raw)) : createInitialState()
   } catch {
     console.warn('[growthTree] load failed, resetting')

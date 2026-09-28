@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { GameState, loadState, saveState, createInitialState, addExp, getRandomQuote, getStage, getTreeName, getLevelExp, getTodayStr, REWARDS, Book, Chapter } from './gameStore'
+import { GameState, loadState, saveState, createInitialState, addExp, getRandomQuote, getStage, getTreeName, getLevelExp, getTodayStr, getYesterdayStr, REWARDS, Book, Chapter } from './gameStore'
 
 const USER_ID = 'default_user'
 const CRED_KEY = 'growthTree:v1:saved_cred'
 
-type Page = 'tree' | 'read' | 'think' | 'profile' | 'library' | 'book-detail' | 'chapter-read'
+type Page = 'tree' | 'read' | 'think' | 'profile' | 'library' | 'book-detail' | 'chapter-read' | 'notes'
 
 function loadSavedCred(): { username: string; password: string; remember: boolean } {
   try {
@@ -24,6 +24,33 @@ function saveCred(username: string, password: string, remember: boolean) {
   } catch {}
 }
 
+// 阅读页字号档位（仅作用于书籍正文，UI 不受影响）
+const FONT_KEY = 'growthTree:fontScale'
+const FONT_SIZES = [
+  { label: '小', px: 14 },
+  { label: '中', px: 16 },
+  { label: '大', px: 18 },
+  { label: '特大', px: 20 },
+]
+const DEFAULT_FONT_PX = 16
+
+function loadFontPx(): number {
+  try {
+    const raw = localStorage.getItem(FONT_KEY)
+    if (raw) {
+      const n = parseInt(raw, 10)
+      if (FONT_SIZES.some(f => f.px === n)) return n
+    }
+  } catch {}
+  return DEFAULT_FONT_PX
+}
+
+function saveFontPx(px: number) {
+  try {
+    localStorage.setItem(FONT_KEY, String(px))
+  } catch {}
+}
+
 export default function App() {
   const savedCred = loadSavedCred()
   const [state, setState] = useState<GameState>(() => loadState(USER_ID))
@@ -35,8 +62,11 @@ export default function App() {
   const [password, setPassword] = useState(savedCred.password)
   const [rememberPwd, setRememberPwd] = useState(savedCred.remember)
   const [showRegister, setShowRegister] = useState(false)
+  const [phone, setPhone] = useState('')
   const [notifications, setNotifications] = useState<string[]>([])
   const [loggedInUser, setLoggedInUser] = useState<string | null>(null)
+  const [showData, setShowData] = useState(false)
+  const [userDataStr, setUserDataStr] = useState('')
 
   const saveRef = useRef(state)
   saveRef.current = state
@@ -50,125 +80,170 @@ export default function App() {
     setTimeout(() => setNotifications(prev => prev.slice(1)), 2000)
   }, [])
 
-  const addExpWithNotify = useCallback((amount: number, reason: string) => {
-    const result = addExp(state, amount)
-    setState(result.state)
-    notify(`+${amount} EXP ${reason}`)
-    for (const ev of result.events) {
-      if (ev.type === 'levelUp') notify(`🎉 升级！Lv.${ev.level}`)
-      if (ev.type === 'stageChange') {
-        const stage = getStage(ev.level)
-        notify(`🌱 进入新阶段：${stage.name}`)
-      }
-    }
-  }, [state, notify])
-
   const handleDailyLogin = useCallback(() => {
     const today = getTodayStr()
-    const ud = { ...state.userData }
-    const dt = { ...state.dailyTask }
+    const yesterday = getYesterdayStr()
     
-    if (dt.login && dt.refreshDate === today) {
+    // Check if already checked in today using checkInDates array
+    if ((state.dailyTask.checkInDates || []).includes(today)) {
       notify('今日已签到')
       return
     }
     
-    dt.login = true
-    dt.refreshDate = today
-    
-    // Check continue
-    const yesterday = new Date()
-    yesterday.setDate(yesterday.getDate() - 1)
-    const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`
-    
-    if (ud.lastCheckDate === yStr) {
-      ud.continueDay += 1
-    } else {
-      ud.continueDay = 1
-    }
-    ud.lastCheckDate = today
-    
-    setState(prev => ({ ...prev, userData: ud, dailyTask: dt }))
-    
-    // Add exp
-    let exp = REWARDS.DAILY_LOGIN
-    if (ud.continueDay >= 7) exp += REWARDS.CONTINUE_BONUS
-    addExpWithNotify(exp, '签到' + (ud.continueDay >= 7 ? ' (连续7天奖励)' : ''))
-  }, [state, addExpWithNotify, notify])
+    // Batch all state updates together
+    setState(prev => {
+      // Double-check within the updater to prevent race conditions
+      if ((prev.dailyTask.checkInDates || []).includes(today)) {
+        setTimeout(() => notify('今日已签到'), 0)
+        return prev
+      }
+      
+      const ud = { ...prev.userData }
+      const dt = { ...prev.dailyTask }
+      
+      dt.login = true
+      dt.refreshDate = today
+      dt.checkInDates = [...(dt.checkInDates || []), today]
+      
+      // Check continuous days using latest prev state
+      const isContinuous = ud.lastCheckDate === yesterday
+      ud.continueDay = isContinuous ? ud.continueDay + 1 : 1
+      ud.lastCheckDate = today
+      
+      // Calculate exp
+      let exp = REWARDS.DAILY_LOGIN
+      if (ud.continueDay >= 7) exp += REWARDS.CONTINUE_BONUS
+      
+      // Apply EXP and level-up within the same batch
+      const result = addExp({ ...prev, userData: ud, dailyTask: dt }, exp)
+      const reason = '签到' + (ud.continueDay >= 7 ? ' (连续7天奖励)' : '')
+      
+      // Use setTimeout to show notification after render commits
+      setTimeout(() => notify(`+${exp} EXP ${reason}`), 0)
+      for (const ev of result.events) {
+        if (ev.type === 'levelUp') {
+          setTimeout(() => notify(`🎉 升级！Lv.${ev.level}`), 100)
+        }
+        if (ev.type === 'stageChange') {
+          setTimeout(() => {
+            const stage = getStage(ev.level)
+            notify(`🌱 进入新阶段：${stage.name}`)
+          }, 200)
+        }
+      }
+      
+      return result.state
+    })
+  }, [state, notify])
 
   const handleReadSubmit = useCallback((bookId: string, chapterId: number) => {
     const today = getTodayStr()
-    const dt = { ...state.dailyTask }
     
-    if (dt.refreshDate !== today) {
-      dt.readSubmit = false
-      dt.thinkSubmit = false
-      dt.thinkSubmitCount = 0
-      dt.eggCount = 0
-      dt.refreshDate = today
-    }
-    
-    if (dt.readSubmit) {
-      notify('今日阅读打卡已提交')
-      return
-    }
-    
-    const books = state.bookList.map(b => {
-      if (b.bookId !== bookId) return b
-      const progress = Math.min(100, b.readProgress + Math.round(100 / b.chapters.length))
-      const records = [...b.readRecords, `${today} - 完成章节 ${chapterId}`]
-      return { ...b, readProgress: progress, readRecords: records, lastReadChapter: chapterId }
+    setState(prev => {
+      const dt = { ...prev.dailyTask }
+      
+      if (dt.refreshDate !== today) {
+        dt.readSubmit = false
+        dt.thinkSubmit = false
+        dt.thinkSubmitCount = 0
+        dt.eggCount = 0
+        dt.refreshDate = today
+      }
+      
+      // 检查该章节是否已被该用户永久标记已读
+      const targetBook = prev.bookList.find(b => b.bookId === bookId)
+      if (targetBook && (targetBook.readChapters || []).includes(chapterId)) {
+        setTimeout(() => notify('该章节已阅读过'), 0)
+        return prev
+      }
+      
+      if (dt.readSubmit) {
+        setTimeout(() => notify('今日阅读打卡已提交'), 0)
+        return prev
+      }
+      
+      const books = prev.bookList.map(b => {
+        if (b.bookId !== bookId) return b
+        const progress = Math.min(100, b.readProgress + Math.round(100 / b.chapters.length))
+        const records = [...b.readRecords, `${today} - 完成章节 ${chapterId}`]
+        const readCh = [...(b.readChapters || []), chapterId]
+        return { ...b, readProgress: progress, readRecords: records, lastReadChapter: chapterId, readChapters: readCh }
+      })
+      
+      dt.readSubmit = true
+      
+      const result = addExp({ ...prev, bookList: books, dailyTask: dt }, REWARDS.READ_SUBMIT)
+      setTimeout(() => notify(`+${REWARDS.READ_SUBMIT} EXP 阅读打卡`), 0)
+      
+      return result.state
     })
-    
-    dt.readSubmit = true
-    
-    setState(prev => ({ ...prev, bookList: books, dailyTask: dt }))
-    addExpWithNotify(REWARDS.READ_SUBMIT, '阅读打卡')
-  }, [state, addExpWithNotify, notify])
+  }, [notify])
 
   const handleThinkSubmit = useCallback((bookId: string, chapterId: number, note: string) => {
     const today = getTodayStr()
-    const dt = { ...state.dailyTask }
     
-    if (dt.refreshDate !== today) {
-      dt.readSubmit = false
-      dt.thinkSubmit = false
-      dt.thinkSubmitCount = 0
-      dt.eggCount = 0
-      dt.refreshDate = today
-    }
-    
-    if (dt.thinkSubmitCount >= REWARDS.THINK_DAILY_MAX) {
-      notify('今日拆解次数已达上限')
-      return
-    }
-    
-    const books = state.bookList.map(b => {
-      if (b.bookId !== bookId) return b
-      const progress = Math.min(100, b.thinkProgress + Math.round(100 / b.chapters.length))
-      const records = [...b.thinkRecords, `${today} - 拆解章节 ${chapterId}: ${note.substring(0, 50)}`]
-      return { ...b, thinkProgress: progress, thinkRecords: records }
+    setState(prev => {
+      const dt = { ...prev.dailyTask }
+      
+      if (dt.refreshDate !== today) {
+        dt.readSubmit = false
+        dt.thinkSubmit = false
+        dt.thinkSubmitCount = 0
+        dt.eggCount = 0
+        dt.refreshDate = today
+      }
+      
+      if (dt.thinkSubmitCount >= REWARDS.THINK_DAILY_MAX) {
+        setTimeout(() => notify('今日拆解次数已达上限'), 0)
+        return prev
+      }
+      
+      const books = prev.bookList.map(b => {
+        if (b.bookId !== bookId) return b
+        const progress = Math.min(100, b.thinkProgress + Math.round(100 / b.chapters.length))
+        const records = [...b.thinkRecords, `${today} [${chapterId}] - ${note}`]
+        return { ...b, thinkProgress: progress, thinkRecords: records }
+      })
+      
+      dt.thinkSubmit = true
+      dt.thinkSubmitCount += 1
+      
+      const result = addExp({ ...prev, bookList: books, dailyTask: dt }, REWARDS.THINK_SUBMIT)
+      setTimeout(() => notify(`+${REWARDS.THINK_SUBMIT} EXP 思维拆解`), 0)
+      
+      return result.state
     })
-    
-    dt.thinkSubmit = true
-    dt.thinkSubmitCount += 1
-    
-    setState(prev => ({ ...prev, bookList: books, dailyTask: dt }))
-    addExpWithNotify(REWARDS.THINK_SUBMIT, '思维拆解')
-  }, [state, addExpWithNotify, notify])
+  }, [notify])
+
+  const handleDeleteNote = useCallback((bookId: string, chapterId: number) => {
+    setState(prev => {
+      const books = prev.bookList.map(b => {
+        if (b.bookId !== bookId) return b
+        const tag = `[${chapterId}]`
+        const records = b.thinkRecords.filter(r => !r.includes(tag))
+        return { ...b, thinkRecords: records }
+      })
+      return { ...prev, bookList: books }
+    })
+  }, [])
 
   const handleBookFinish = useCallback((bookId: string, summary: string) => {
-    const books = state.bookList.map(b => {
-      if (b.bookId !== bookId) return b
-      return { ...b, status: 'finish' as const, finishTime: new Date().toISOString(), finishSummary: summary }
+    setState(prev => {
+      const books = prev.bookList.map(b => {
+        if (b.bookId !== bookId) return b
+        return { ...b, status: 'finish' as const, finishTime: new Date().toISOString(), finishSummary: summary }
+      })
+      
+      const ud = { ...prev.userData, totalReadBook: prev.userData.totalReadBook + 1 }
+      const result = addExp({ ...prev, bookList: books, userData: ud }, REWARDS.BOOK_FINISH)
+      
+      const bookName = books.find(b => b.bookId === bookId)?.bookName || ''
+      setTimeout(() => notify(`+${REWARDS.BOOK_FINISH} EXP 结业书籍`), 0)
+      setTimeout(() => notify(`📚 《${bookName}》结业！`), 100)
+      
+      return result.state
     })
-    
-    const ud = { ...state.userData, totalReadBook: state.userData.totalReadBook + 1 }
-    
-    setState(prev => ({ ...prev, bookList: books, userData: ud }))
-    addExpWithNotify(REWARDS.BOOK_FINISH, '结业书籍')
-    notify(`📚 《${books.find(b => b.bookId === bookId)?.bookName}》结业！`)
-  }, [state, addExpWithNotify, notify])
+  }, [notify])
 
   // Login page
   if (showLogin && !loggedInUser) {
@@ -309,7 +384,7 @@ export default function App() {
       <main className="flex-1 overflow-y-auto">
         {page === 'tree' && <TreePage state={state} onDailyLogin={handleDailyLogin} onNavigate={setPage} />}
         {page === 'read' && <ReadPage state={state} onRead={handleReadSubmit} onSelectBook={(b) => { setSelectedBook(b); setPage('book-detail') }} />}
-        {page === 'think' && <ThinkPage state={state} onSubmit={handleThinkSubmit} onSelectBook={(b) => { setSelectedBook(b); setPage('book-detail') }} />}
+        {page === 'think' && <NotesPage state={state} onDeleteNote={handleDeleteNote} />}
         {page === 'profile' && <ProfilePage state={state} />}
         {page === 'library' && <LibraryPage state={state} onSelectBook={(b) => { setSelectedBook(b); setPage('book-detail') }} />}
         {page === 'book-detail' && selectedBook && (
@@ -323,12 +398,13 @@ export default function App() {
         )}
         {page === 'chapter-read' && selectedBook && selectedChapter && (
           <ChapterReadPage
-            book={selectedBook}
+            book={state.bookList.find(b => b.bookId === selectedBook.bookId) || selectedBook}
             chapter={selectedChapter}
             state={state}
             onBack={() => setPage('book-detail')}
             onReadSubmit={handleReadSubmit}
             onThinkSubmit={handleThinkSubmit}
+            onDeleteNote={handleDeleteNote}
             onNavigate={(ch) => { setSelectedChapter(ch); }}
           />
         )}
@@ -339,7 +415,7 @@ export default function App() {
         {[
           { id: 'tree' as Page, icon: '🌳', label: '成长' },
           { id: 'read' as Page, icon: '📖', label: '阅读' },
-          { id: 'think' as Page, icon: '🧠', label: '拆解' },
+          { id: 'think' as Page, icon: '📝', label: '笔记' },
           { id: 'library' as Page, icon: '📚', label: '书库' },
           { id: 'profile' as Page, icon: '👤', label: '我的' },
         ].map(item => (
@@ -364,6 +440,93 @@ export default function App() {
           ))}
         </div>
       )}
+
+      {/* 显示数据按钮 */}
+      <button
+        className="fixed bottom-20 left-2 z-50 text-[10px] bg-white/80 border border-moss-300 rounded px-1.5 py-0.5 text-moss-600"
+        onClick={() => {
+          const raw = localStorage.getItem('growthTree:v1:user:default_user')
+          setUserDataStr(raw ? JSON.stringify(JSON.parse(raw), null, 2) : '无数据')
+          setShowData(true)
+        }}
+      >
+        📊
+      </button>
+
+      {showData && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowData(false)}>
+          <pre className="bg-white text-xs text-moss-900 p-4 rounded-xl max-w-full max-h-[80vh] overflow-auto whitespace-pre-wrap font-mono" onClick={e => e.stopPropagation()}>
+            {userDataStr}
+            <div className="mt-3 text-center">
+              <button className="text-xs text-tender-500 underline" onClick={() => setShowData(false)}>关闭</button>
+            </div>
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ===== Compact Calendar Component (1/4 original height) =====
+
+function CalendarView({ checkInDates }: { checkInDates: string[] }) {
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear())
+  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth())
+  const today = new Date()
+  const todayStr = getTodayStr()
+  
+  const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
+  
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay()
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
+  
+  const goPrev = () => {
+    if (viewMonth === 0) { setViewYear(viewYear - 1); setViewMonth(11) }
+    else setViewMonth(viewMonth - 1)
+  }
+  const goNext = () => {
+    if (viewMonth === 11) { setViewYear(viewYear + 1); setViewMonth(0) }
+    else setViewMonth(viewMonth + 1)
+  }
+  const goToday = () => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()) }
+  
+  const cells: React.ReactNode[] = []
+  for (let i = 0; i < firstDay; i++) cells.push(<div key={`e-${i}`} />)
+  
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const isCheckIn = checkInDates.includes(dateStr)
+    const isToday = dateStr === todayStr
+    cells.push(
+      <div
+        key={d}
+        className={`flex items-center justify-center rounded text-[10px] leading-none h-5 ${
+          isToday ? 'bg-tender-500 text-white font-bold' : isCheckIn ? 'bg-green-100 text-green-700 font-medium' : 'text-moss-400'
+        }`}
+      >
+        {isCheckIn ? '✓' : d}
+      </div>
+    )
+  }
+  
+  return (
+    <div className="text-[10px] leading-tight">
+      {/* Header: nav + month */}
+      <div className="flex items-center justify-between mb-1">
+        <button onClick={goPrev} className="w-5 h-5 flex items-center justify-center hover:bg-moss-100 rounded text-moss-400">◀</button>
+        <button onClick={goToday} className="text-[11px] font-medium text-moss-600 hover:text-tender-600 px-1">{viewYear}年{monthNames[viewMonth]}</button>
+        <button onClick={goNext} className="w-5 h-5 flex items-center justify-center hover:bg-moss-100 rounded text-moss-400">▶</button>
+      </div>
+      {/* Weekday headers */}
+      <div className="grid grid-cols-7 mb-[1px]">
+        {['日','一','二','三','四','五','六'].map(d => (
+          <div key={d} className="text-center text-moss-400 text-[9px]">{d}</div>
+        ))}
+      </div>
+      {/* Day cells */}
+      <div className="grid grid-cols-7 gap-[1px]">
+        {cells}
+      </div>
     </div>
   )
 }
@@ -406,22 +569,6 @@ function TreePage({ state, onDailyLogin, onNavigate }: { state: GameState; onDai
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="surface rounded-xl p-3 text-center">
-          <div className="numeral text-xl font-bold">{state.userData.continueDay}</div>
-          <div className="text-[10px] text-moss-500">连续签到</div>
-        </div>
-        <div className="surface rounded-xl p-3 text-center">
-          <div className="numeral text-xl font-bold">{state.userData.totalReadBook}</div>
-          <div className="text-[10px] text-moss-500">结业书籍</div>
-        </div>
-        <div className="surface rounded-xl p-3 text-center">
-          <div className="numeral text-xl font-bold">{state.userData.totalOutput}</div>
-          <div className="text-[10px] text-moss-500">思维输出</div>
-        </div>
-      </div>
-
       {/* Quote */}
       <div className="surface rounded-xl p-4 text-center">
         <p className="text-sm text-moss-600 italic leading-relaxed">"{getRandomQuote()}"</p>
@@ -444,10 +591,32 @@ function TreePage({ state, onDailyLogin, onNavigate }: { state: GameState; onDai
           <div className="text-[10px] text-moss-500">每日阅读打卡</div>
         </button>
         <button className="surface rounded-xl p-4 text-left hover:shadow-soft-lg transition" onClick={() => onNavigate('think')}>
-          <div className="text-2xl mb-1">🧠</div>
-          <div className="text-sm font-medium text-moss-700">思维拆解</div>
-          <div className="text-[10px] text-moss-500">输出思考笔记</div>
+          <div className="text-2xl mb-1">📝</div>
+          <div className="text-sm font-medium text-moss-700">我的笔记</div>
+          <div className="text-[10px] text-moss-500">查看所有思考笔记</div>
         </button>
+      </div>
+
+      {/* Stats - moved to bottom */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="surface rounded-xl p-3 text-center">
+          <div className="numeral text-xl font-bold">{state.userData.continueDay}</div>
+          <div className="text-[10px] text-moss-500">连续签到</div>
+        </div>
+        <div className="surface rounded-xl p-3 text-center">
+          <div className="numeral text-xl font-bold">{state.userData.totalReadBook}</div>
+          <div className="text-[10px] text-moss-500">结业书籍</div>
+        </div>
+        <div className="surface rounded-xl p-3 text-center">
+          <div className="numeral text-xl font-bold">{state.userData.totalOutput}</div>
+          <div className="text-[10px] text-moss-500">思维输出</div>
+        </div>
+      </div>
+
+      {/* Calendar - compact, moved to bottom */}
+      <div className="surface rounded-xl px-3 py-2.5">
+        <h3 className="text-[11px] font-medium text-moss-700 mb-1.5">📅 签到日历</h3>
+        <CalendarView checkInDates={state.dailyTask.checkInDates || []} />
       </div>
     </div>
   )
@@ -490,67 +659,63 @@ function ReadPage({ state, onRead, onSelectBook }: { state: GameState; onRead: (
   )
 }
 
-function ThinkPage({ state, onSubmit, onSelectBook }: { state: GameState; onSubmit: (bookId: string, ch: number, note: string) => void; onSelectBook: (b: Book) => void }) {
-  const [note, setNote] = useState('')
-  const [selectedBookId, setSelectedBookId] = useState(state.bookList[0]?.bookId || '')
-  const [selectedChapterId, setSelectedChapterId] = useState(1)
-  
-  const book = state.bookList.find(b => b.bookId === selectedBookId)
-  const today = getTodayStr()
-  const canSubmit = state.dailyTask.refreshDate !== today || state.dailyTask.thinkSubmitCount < REWARDS.THINK_DAILY_MAX
+function NotesPage({ state, onDeleteNote }: { state: GameState; onDeleteNote: (bookId: string, ch: number) => void }) {
+  // Collect all think records from all books, newest first
+  const allNotes: { bookName: string; chapterId: number; record: string; bookId: string }[] = []
+  for (const book of state.bookList) {
+    if (book.thinkRecords.length > 0) {
+      for (const record of book.thinkRecords) {
+        const chMatch = record.match(/\[(\d+)\]/)
+        const chId = chMatch ? parseInt(chMatch[1]) : 0
+        allNotes.push({ bookName: book.bookName, chapterId: chId, record, bookId: book.bookId })
+      }
+    }
+  }
+  // Sort by date (records start with date string like "2026-07-03 - ...")
+  allNotes.sort((a, b) => {
+    const dateA = a.record.match(/^\d{4}-\d{2}-\d{2}/)
+    const dateB = b.record.match(/^\d{4}-\d{2}-\d{2}/)
+    if (dateA && dateB) return dateB[0].localeCompare(dateA[0])
+    return 0
+  })
+
+  if (allNotes.length === 0) {
+    return (
+      <div className="p-4 text-center mt-20 animate-scale-in">
+        <div className="text-5xl mb-4">📝</div>
+        <p className="text-moss-500">暂无笔记，读完章节后写下你的思考吧</p>
+      </div>
+    )
+  }
 
   return (
-    <div className="p-4 space-y-4 animate-scale-in">
-      <h2 className="heading text-lg">思维拆解笔记</h2>
-      
-      <div className="surface rounded-xl p-4 space-y-3">
-        <div>
-          <label className="text-xs text-moss-500 mb-1 block">选择书籍</label>
-          <select className="w-full px-3 py-2 rounded-xl border border-moss-200/60 bg-white/80 text-sm" value={selectedBookId} onChange={e => setSelectedBookId(e.target.value)}>
-            {state.bookList.filter(b => b.status !== 'lock').map(b => (
-              <option key={b.bookId} value={b.bookId}>{b.bookName}</option>
-            ))}
-          </select>
-        </div>
-        
-        <div>
-          <label className="text-xs text-moss-500 mb-1 block">选择章节</label>
-          <select className="w-full px-3 py-2 rounded-xl border border-moss-200/60 bg-white/80 text-sm" value={selectedChapterId} onChange={e => setSelectedChapterId(Number(e.target.value))}>
-            {book?.chapters.map(ch => (
-              <option key={ch.chapterId} value={ch.chapterId}>{ch.chapterId}. {ch.title.substring(0, 30)}</option>
-            ))}
-          </select>
-        </div>
-        
-        <div>
-          <label className="text-xs text-moss-500 mb-1 block">拆解笔记</label>
-          <textarea
-            className="w-full px-3 py-2 rounded-xl border border-moss-200/60 bg-white/80 text-sm resize-none h-24 focus:border-tender-400 focus:outline-none transition"
-            placeholder="写下你的思考、感悟、应用场景..."
-            value={note}
-            onChange={e => setNote(e.target.value)}
-          />
-        </div>
-        
-        <button
-          className="btn-gold w-full"
-          disabled={!canSubmit || !note.trim()}
-          onClick={() => { onSubmit(selectedBookId, selectedChapterId, note); setNote('') }}
-        >
-          {canSubmit ? '提交拆解 (+30 EXP)' : '今日拆解已达上限'}
-        </button>
-        <p className="text-[10px] text-moss-400 text-center">每日最多 {REWARDS.THINK_DAILY_MAX} 次拆解</p>
-      </div>
-
-      {/* Recent think records */}
-      {book && book.thinkRecords.length > 0 && (
-        <div className="surface rounded-xl p-4">
-          <h3 className="text-xs font-medium text-moss-500 mb-2">最近拆解记录</h3>
-          {book.thinkRecords.slice(-3).reverse().map((r, i) => (
-            <p key={i} className="text-xs text-moss-600 py-1 border-b border-moss-200/40 last:border-0">{r}</p>
-          ))}
-        </div>
-      )}
+    <div className="p-4 space-y-3 animate-scale-in">
+      <h2 className="heading text-lg mb-2">我的笔记</h2>
+      <p className="text-[10px] text-moss-400 mb-3">共 {allNotes.length} 条笔记</p>
+      {allNotes.map((note, i) => {
+        const dateMatch = note.record.match(/^(\d{4}-\d{2}-\d{2})/)
+        const dateStr = dateMatch ? dateMatch[1] : ''
+        const content = note.record.replace(/^\d{4}-\d{2}-\d{2} \[\d+\] - /, '')
+        return (
+          <div key={i} className="surface rounded-xl p-4">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-tender-600">{note.bookName}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-moss-400">{dateStr}</span>
+                {note.chapterId > 0 && (
+                  <button
+                    className="text-[10px] text-red-300 hover:text-red-500 transition"
+                    onClick={() => { if (confirm('删除此笔记？')) onDeleteNote(note.bookId, note.chapterId) }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="text-sm text-moss-700 leading-relaxed">{content}</p>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -738,6 +903,7 @@ function BookDetailPage({ book, state, onBack, onRead, onFinish }: {
         <div className="divide-y divide-moss-200/40 max-h-96 overflow-y-auto">
           {book.chapters.map(ch => {
             const isCurrent = currentChapter?.chapterId === ch.chapterId
+            const isRead = (book.readChapters || []).includes(ch.chapterId)
             return (
               <div
                 key={ch.chapterId}
@@ -745,7 +911,7 @@ function BookDetailPage({ book, state, onBack, onRead, onFinish }: {
                 onClick={() => onRead(ch)}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="numeral text-xs w-6 text-center shrink-0">{ch.chapterId}</span>
+                  <span className="text-xs w-6 text-center shrink-0">{isRead ? '✅' : ch.chapterId}</span>
                   <span className="text-sm text-moss-700 truncate">{ch.title}</span>
                 </div>
                 <span className="text-[10px] text-moss-400 shrink-0">{ch.content.length}字</span>
@@ -795,19 +961,30 @@ function BookDetailPage({ book, state, onBack, onRead, onFinish }: {
   )
 }
 
-function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSubmit, onNavigate }: {
+function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSubmit, onDeleteNote, onNavigate }: {
   book: Book
   chapter: Chapter
   state: GameState
   onBack: () => void
   onReadSubmit: (bookId: string, ch: number) => void
   onThinkSubmit: (bookId: string, ch: number, note: string) => void
+  onDeleteNote: (bookId: string, ch: number) => void
   onNavigate: (ch: Chapter) => void
 }) {
   const [showThinkInput, setShowThinkInput] = useState(false)
   const [note, setNote] = useState('')
+  const [fontPx, setFontPx] = useState(loadFontPx)
+  const [showFontPanel, setShowFontPanel] = useState(false)
+
+  const changeFont = (px: number) => {
+    setFontPx(px)
+    saveFontPx(px)
+  }
+
   const today = getTodayStr()
-  const alreadyRead = state.dailyTask.readSubmit && state.dailyTask.refreshDate === today
+  const isChapterRead = (book.readChapters || []).includes(chapter.chapterId)
+  const alreadyRead = isChapterRead
+  const hasNote = book.thinkRecords.some(r => r.includes(`[${chapter.chapterId}]`))
 
   const chIdx = book.chapters.findIndex(c => c.chapterId === chapter.chapterId)
   const prevCh = chIdx > 0 ? book.chapters[chIdx - 1] : null
@@ -817,13 +994,16 @@ function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSu
   const renderContent = (text: string) => {
     const lines = text.split('\n')
     return lines.map((line, i) => {
-      if (line.startsWith('# ')) return <h1 key={i} className="heading text-xl mb-3 mt-4">{line.slice(2)}</h1>
-      if (line.startsWith('## ')) return <h2 key={i} className="heading text-lg mb-2 mt-4">{line.slice(3)}</h2>
-      if (line.startsWith('### ')) return <h3 key={i} className="heading text-base mb-2 mt-3">{line.slice(4)}</h3>
-      if (line.startsWith('**') && line.endsWith('**')) return <p key={i} className="font-bold text-moss-700 mb-2">{line.slice(2, -2)}</p>
-      if (line.trim() === '---') return <hr key={i} className="my-3 border-moss-200/60" />
-      if (line.trim() === '') return <div key={i} className="h-2" />
-      return <p key={i} className="text-sm text-moss-700 leading-relaxed mb-1.5">{line}</p>
+      if (line.startsWith('# ')) return <h1 key={i} className="heading text-[1.5em] mb-[0.75em] mt-[1em]">{line.slice(2)}</h1>
+      if (line.startsWith('## ')) return <h2 key={i} className="heading text-[1.25em] mb-[0.5em] mt-[1em]">{line.slice(3)}</h2>
+      if (line.startsWith('### ')) return <h3 key={i} className="heading text-[1.125em] mb-[0.5em] mt-[0.75em]">{line.slice(4)}</h3>
+      if (line.startsWith('**') && line.endsWith('**')) return <p key={i} className="font-bold text-moss-700 mb-[0.5em]">{line.slice(2, -2)}</p>
+      if (line.trim() === '---') return <hr key={i} className="my-[1em] border-moss-200/60" />
+      if (line.trim() === '') return <div key={i} className="h-[0.5em]" />
+      // Image markdown: ![alt](src)
+      const imgMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
+      if (imgMatch) return <div key={i} className="my-3 flex justify-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full rounded-lg" loading="lazy" /></div>
+      return <p key={i} className="text-moss-700 leading-relaxed mb-[0.4em]">{line}</p>
     })
   }
 
@@ -838,11 +1018,34 @@ function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSu
           <h2 className="text-sm font-medium text-moss-700 truncate">{chapter.title}</h2>
           <p className="text-[10px] text-moss-400">{book.bookName}</p>
         </div>
+        <button
+          className="ml-auto shrink-0 px-2 py-1 rounded-lg text-xs font-semibold text-moss-600 hover:bg-moss-50 transition"
+          onClick={() => setShowFontPanel(v => !v)}
+          title="调整字号"
+        >
+          A<span className="text-[10px]">A</span>
+        </button>
       </div>
+
+      {/* 字号调节面板 */}
+      {showFontPanel && (
+        <div className="shrink-0 px-4 pb-2 bg-white/80 backdrop-blur-sm border-b border-moss-200/60 flex items-center gap-2">
+          <span className="text-[10px] text-moss-400 shrink-0">字号</span>
+          {FONT_SIZES.map(f => (
+            <button
+              key={f.px}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition ${fontPx === f.px ? 'bg-tender-100 text-tender-700' : 'bg-moss-50 text-moss-600 hover:bg-moss-100'}`}
+              onClick={() => changeFont(f.px)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="surface rounded-2xl p-5 max-w-2xl mx-auto">
+        <div className="surface rounded-2xl p-5 max-w-2xl mx-auto" style={{ fontSize: `${fontPx}px` }}>
           {renderContent(chapter.content)}
         </div>
       </div>
@@ -851,17 +1054,36 @@ function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSu
       <div className="shrink-0 px-4 py-3 bg-white/90 backdrop-blur-xl border-t border-moss-200/60 flex gap-2">
         <button
           className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${alreadyRead ? 'bg-moss-100 text-moss-500' : 'btn-gold'}`}
-          onClick={() => { if (!alreadyRead) onReadSubmit(book.bookId, chapter.chapterId) }}
+          onClick={() => {
+            if (!alreadyRead) {
+              onReadSubmit(book.bookId, chapter.chapterId)
+              // Auto-prompt for notes after marking as read
+              setTimeout(() => setShowThinkInput(true), 300)
+            }
+          }}
           disabled={alreadyRead}
         >
           {alreadyRead ? '✅ 已读' : '📖 标记已读 (+15 EXP)'}
         </button>
         <button
-          className="flex-1 py-2.5 rounded-xl text-sm font-medium btn-ghost"
-          onClick={() => setShowThinkInput(true)}
+          className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${hasNote ? 'bg-moss-100 text-moss-500' : 'btn-ghost'}`}
+          onClick={() => { if (!hasNote) setShowThinkInput(true) }}
+          disabled={hasNote}
         >
-          🧠 写拆解笔记 (+30 EXP)
+          {hasNote ? '✅ 已写笔记' : '🧠 写笔记 (+30 EXP)'}
         </button>
+        {hasNote && (
+          <button
+            className="py-2.5 px-3 rounded-xl text-sm font-medium text-red-400 hover:bg-red-50 transition"
+            onClick={() => {
+              if (confirm('删除此章节的笔记？')) {
+                onDeleteNote(book.bookId, chapter.chapterId)
+              }
+            }}
+          >
+            🗑️
+          </button>
+        )}
       </div>
 
       {/* Chapter nav */}
@@ -888,7 +1110,7 @@ function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSu
       {showThinkInput && (
         <div className="fixed inset-0 bg-black/20 z-40 flex items-end sm:items-center justify-center" onClick={() => setShowThinkInput(false)}>
           <div className="surface rounded-t-2xl sm:rounded-2xl p-5 w-full max-w-md animate-scale-in" onClick={e => e.stopPropagation()}>
-            <h3 className="text-sm font-medium text-moss-700 mb-3">思维拆解笔记</h3>
+            <h3 className="text-sm font-medium text-moss-700 mb-3">读书笔记</h3>
             <textarea
               className="w-full h-28 px-3 py-2 rounded-xl border border-moss-200/60 bg-white/80 text-sm resize-none focus:border-tender-400 focus:outline-none transition mb-3"
               placeholder="这个模型如何应用到你的生活？..."
