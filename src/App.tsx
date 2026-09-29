@@ -1002,7 +1002,7 @@ function ChapterReadPage({ book, chapter, state, onBack, onReadSubmit, onThinkSu
       if (line.trim() === '') return <div key={i} className="h-[0.5em]" />
       // Image markdown: ![alt](src)
       const imgMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/)
-      if (imgMatch) return <div key={i} className="my-3 flex justify-center"><img src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full rounded-lg" loading="lazy" /></div>
+      if (imgMatch) return <div key={i} className="my-3 flex justify-center"><img src={imgMatch[2].replace(/^\//, '')} alt={imgMatch[1]} className="max-w-full rounded-lg" loading="lazy" /></div>
       return <p key={i} className="text-moss-700 leading-relaxed mb-[0.4em]">{line}</p>
     })
   }
